@@ -899,10 +899,11 @@ class AliceBrowser:
                     await page.keyboard.press("Delete")
                     await asyncio.sleep(0.3)
 
-                    await page.keyboard.type(edit_prompt, delay=30)
+                    draw_command = f"Измени: {edit_prompt}"
+                    await page.keyboard.type(draw_command, delay=30)
                     await asyncio.sleep(0.5)
                     await page.keyboard.press("Enter")
-                    log.info(f"Edit prompt sent: {edit_prompt[:60]}")
+                    log.info(f"Edit prompt sent: {draw_command[:80]}")
 
                     # Wait for a NEW image that wasn't there before the edit
                     new_image_url = await self._wait_for_new_image(page, existing_images, timeout)
@@ -914,7 +915,8 @@ class AliceBrowser:
         raise HTTPException(500, "Could not find edit button on generated image")
 
     async def _wait_for_new_image(self, page: object, existing_urls: list, timeout: int = 120) -> str:
-        """Wait for a new image to appear that isn't in existing_urls."""
+        """Wait for a new image to appear that isn't in existing_urls.
+        Handles page navigation gracefully by catching context destruction."""
         existing_set = set(existing_urls)
         start = time.time()
 
@@ -937,22 +939,39 @@ class AliceBrowser:
                     await asyncio.sleep(3)
                     return url
 
-                # Check DOM for new images
-                current_imgs = await page.evaluate("""
-                    () => {
-                        const imgs = document.querySelectorAll('img[src*="yaart"], img[src*="s3.yandex"]');
-                        return Array.from(imgs).map(img => img.src);
-                    }
-                """)
-                for url in current_imgs:
-                    if url not in existing_set:
-                        log.info(f"New image in DOM: {url[:100]}")
-                        await asyncio.sleep(3)
-                        return url
+                # Check DOM for new images (handle navigation/context loss)
+                try:
+                    current_imgs = await page.evaluate("""
+                        () => {
+                            const imgs = document.querySelectorAll('img[src*="yaart"], img[src*="s3.yandex"]');
+                            return Array.from(imgs).map(img => img.src);
+                        }
+                    """)
+                    for url in current_imgs:
+                        if url not in existing_set:
+                            log.info(f"New image in DOM: {url[:100]}")
+                            await asyncio.sleep(3)
+                            return url
+                except Exception as e:
+                    # Page navigation destroyed context — wait for page to stabilize
+                    log.warning(f"Page context lost during edit: {str(e)[:80]}, waiting for reload...")
+                    try:
+                        await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                    except:
+                        pass
+                    await asyncio.sleep(5)
+                    # Re-attach listener after navigation
+                    try:
+                        page.on("response", on_response)
+                    except:
+                        pass
 
                 await asyncio.sleep(2)
         finally:
-            page.remove_listener("response", on_response)
+            try:
+                page.remove_listener("response", on_response)
+            except:
+                pass
 
         raise HTTPException(504, "Edited image timeout — no new image appeared after edit")
 
@@ -1346,7 +1365,7 @@ async def edit_image(req: Request):
         raise HTTPException(400, "image (base64), url, or image_path required")
 
     try:
-        edit_msg = f"Edit this image: {enhanced_prompt}. Apply the changes and return the result."
+        edit_msg = f"Измени: {enhanced_prompt}"
         response = await alice_browser.send_with_image(
             model, edit_msg,
             image_b64=image_b64 if image_b64 else None,
@@ -1363,7 +1382,7 @@ async def vision_analyze(req: Request):
     image_b64 = body.get("image", "")
     image_url = body.get("url", "")
     model = body.get("model", "alice-vision")
-    prompt = body.get("prompt", "Describe this image in detail: what you see, colors, composition, mood, style, and any notable elements.")
+    prompt = body.get("prompt", "Опиши это изображение подробно: что видишь, цвета, композиция, настроение, стиль и любые заметные элементы.")
 
     if image_url and not image_b64:
         import httpx
@@ -1463,7 +1482,7 @@ async def media_generate(req: Request):
 
         enhanced = alice_browser._rewrite_image_prompt(edit_prompt)
         try:
-            edit_msg = f"Edit this image: {enhanced}. Apply the changes and return the result."
+            edit_msg = f"Измени: {enhanced}"
             response = await alice_browser.send_with_image(
                 model, edit_msg, image_b64=image_b64, new_chat=False,
             )
@@ -1474,7 +1493,10 @@ async def media_generate(req: Request):
     elif action == "vision":
         image_b64 = body.get("image", "")
         image_url = body.get("url", "")
-        vision_prompt = body.get("vision_prompt", prompt or "Describe this image in detail.")
+        vision_prompt = body.get("vision_prompt", prompt or "Опиши это изображение подробно.")
+        # Ensure Russian prefix for vision
+        if not vision_prompt.startswith(("Опиши", "Посмотри", "Что")):
+            vision_prompt = f"Опиши: {vision_prompt}"
 
         if image_url and not image_b64:
             import httpx
