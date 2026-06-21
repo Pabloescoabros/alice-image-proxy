@@ -1,28 +1,27 @@
-# State and cache
+# State & browser data
 state/
-cache/
-*.log
 
-# Credentials
+# Cache
+cache/
+
+# Cookies
 cookies.txt
-*.session
-.env
+
+# Logs
+*.log
 
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
+*.pyc
+*.pyo
+.venv/
 venv/
-ENV/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
 # OS
 .DS_Store
@@ -30,4 +29,9 @@ Thumbs.db
 
 # Debug
 debug_screenshot.png
-media/
+
+# Session files
+*.session
+
+# Environment
+.env
