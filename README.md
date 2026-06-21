@@ -48,17 +48,156 @@
 
 ## Installation
 
+### Quick Start (recommended)
+
+The project includes an automatic setup checker that verifies all prerequisites and installs missing dependencies:
+
 ```bash
 # Clone
 git clone https://github.com/Pabloescoabros/alice-image-proxy.git
 cd alice-image-proxy
 
-# Install dependencies
-pip install fastapi uvicorn playwright httpx pydantic
-
-# Install browser
-playwright install chromium
+# Run setup checker — installs everything that's missing
+python setup.py
 ```
+
+The setup script checks:
+- Python version (3.10+)
+- pip availability
+- Required packages (fastapi, uvicorn, playwright, httpx, pydantic)
+- Google Chrome / Chromium browser
+- Playwright browser binaries
+- Port availability (default 8976)
+- Project structure (required files and directories)
+
+Use `--check` to verify without installing:
+
+```bash
+python setup.py --check
+```
+
+### Manual Installation
+
+<details>
+<summary>Windows</summary>
+
+```powershell
+# 1. Install Python 3.10+ (if not installed)
+winget install Python.Python.3.13
+
+# 2. Clone the repo
+git clone https://github.com/Pabloescoabros/alice-image-proxy.git
+cd alice-image-proxy
+
+# 3. Install Python dependencies
+pip install fastapi uvicorn[standard] playwright httpx pydantic
+
+# 4. Install Playwright browser
+python -m playwright install chromium
+
+# 5. Install Chrome (if not installed)
+winget install Google.Chrome
+```
+
+</details>
+
+<details>
+<summary>Linux (Debian/Ubuntu)</summary>
+
+```bash
+# 1. Install Python 3.10+ and pip
+sudo apt update && sudo apt install -y python3 python3-pip python3-venv git
+
+# 2. Clone the repo
+git clone https://github.com/Pabloescoabros/alice-image-proxy.git
+cd alice-image-proxy
+
+# 3. (Optional) Create a virtual environment
+python3 -m venv .venv && source .venv/bin/activate
+
+# 4. Install Python dependencies
+pip install fastapi uvicorn[standard] playwright httpx pydantic
+
+# 5. Install Playwright browser and system dependencies
+python -m playwright install chromium
+python -m playwright install-deps chromium
+
+# 6. Install Google Chrome (if not installed)
+wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' | sudo tee /etc/apt/sources.list.d/google-chrome.list
+sudo apt update && sudo apt install -y google-chrome-stable
+```
+
+</details>
+
+<details>
+<summary>Linux (Fedora/RHEL)</summary>
+
+```bash
+# 1. Install Python and pip
+sudo dnf install -y python3 python3-pip git
+
+# 2. Clone the repo
+git clone https://github.com/Pabloescoabros/alice-image-proxy.git
+cd alice-image-proxy
+
+# 3. Install Python dependencies
+pip install fastapi uvicorn[standard] playwright httpx pydantic
+
+# 4. Install Playwright browser and system dependencies
+python -m playwright install chromium
+python -m playwright install-deps chromium
+
+# 5. Install Chrome (optional, Chromium from repo works too)
+sudo dnf install -y fedora-workstation-repositories
+sudo dnf config-manager --set-enabled google-chrome
+sudo dnf install -y google-chrome-stable
+```
+
+</details>
+
+<details>
+<summary>Linux (Arch)</summary>
+
+```bash
+# 1. Install dependencies
+sudo pacman -S python python-pip git chromium
+
+# 2. Clone the repo
+git clone https://github.com/Pabloescoabros/alice-image-proxy.git
+cd alice-image-proxy
+
+# 3. Install Python dependencies
+pip install fastapi uvicorn[standard] playwright httpx pydantic
+
+# 4. Install Playwright browser
+python -m playwright install chromium
+```
+
+</details>
+
+<details>
+<summary>macOS</summary>
+
+```bash
+# 1. Install Python (if needed)
+brew install python@3.13
+
+# 2. Clone the repo
+git clone https://github.com/Pabloescoabros/alice-image-proxy.git
+cd alice-image-proxy
+
+# 3. Install Python dependencies
+pip install fastapi uvicorn[standard] playwright httpx pydantic
+
+# 4. Install Playwright browser
+python -m playwright install chromium
+
+# 5. Install Chrome (if not installed)
+brew install --cask google-chrome
+```
+
+</details>
 
 ## Quick Start
 
@@ -329,17 +468,156 @@ MIT
 
 ## Установка
 
+### Быстрый старт (рекомендуется)
+
+В проект включён автоматический чекер установки — проверяет все зависимости и устанавливает недостающее:
+
 ```bash
 # Клонировать
 git clone https://github.com/Pabloescoabros/alice-image-proxy.git
 cd alice-image-proxy
 
-# Установить зависимости
-pip install fastapi uvicorn playwright httpx pydantic
-
-# Установить браузер
-playwright install chromium
+# Запустить чекер — установит всё что нужно
+python setup.py
 ```
+
+Скрипт проверяет:
+- Версию Python (3.10+)
+- Наличие pip
+- Python-пакеты (fastapi, uvicorn, playwright, httpx, pydantic)
+- Браузер Google Chrome / Chromium
+- Браузер Playwright (бинарники)
+- Доступность порта (по умолчанию 8976)
+- Структуру проекта (файлы и директории)
+
+Только проверка без установки:
+
+```bash
+python setup.py --check
+```
+
+### Ручная установка
+
+<details>
+<summary>Windows</summary>
+
+```powershell
+# 1. Установить Python 3.10+ (если не установлен)
+winget install Python.Python.3.13
+
+# 2. Клонировать репозиторий
+git clone https://github.com/Pabloescoabros/alice-image-proxy.git
+cd alice-image-proxy
+
+# 3. Установить Python-зависимости
+pip install fastapi uvicorn[standard] playwright httpx pydantic
+
+# 4. Установить браузер Playwright
+python -m playwright install chromium
+
+# 5. Установить Chrome (если не установлен)
+winget install Google.Chrome
+```
+
+</details>
+
+<details>
+<summary>Linux (Debian/Ubuntu)</summary>
+
+```bash
+# 1. Установить Python 3.10+ и pip
+sudo apt update && sudo apt install -y python3 python3-pip python3-venv git
+
+# 2. Клонировать репозиторий
+git clone https://github.com/Pabloescoabros/alice-image-proxy.git
+cd alice-image-proxy
+
+# 3. (Опционально) Создать виртуальное окружение
+python3 -m venv .venv && source .venv/bin/activate
+
+# 4. Установить Python-зависимости
+pip install fastapi uvicorn[standard] playwright httpx pydantic
+
+# 5. Установить браузер Playwright и системные зависимости
+python -m playwright install chromium
+python -m playwright install-deps chromium
+
+# 6. Установить Google Chrome (если не установлен)
+wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' | sudo tee /etc/apt/sources.list.d/google-chrome.list
+sudo apt update && sudo apt install -y google-chrome-stable
+```
+
+</details>
+
+<details>
+<summary>Linux (Fedora/RHEL)</summary>
+
+```bash
+# 1. Установить Python и pip
+sudo dnf install -y python3 python3-pip git
+
+# 2. Клонировать репозиторий
+git clone https://github.com/Pabloescoabros/alice-image-proxy.git
+cd alice-image-proxy
+
+# 3. Установить Python-зависимости
+pip install fastapi uvicorn[standard] playwright httpx pydantic
+
+# 4. Установить браузер Playwright и системные зависимости
+python -m playwright install chromium
+python -m playwright install-deps chromium
+
+# 5. Установить Chrome (опционально, Chromium из репо тоже подойдёт)
+sudo dnf install -y fedora-workstation-repositories
+sudo dnf config-manager --set-enabled google-chrome
+sudo dnf install -y google-chrome-stable
+```
+
+</details>
+
+<details>
+<summary>Linux (Arch)</summary>
+
+```bash
+# 1. Установить зависимости
+sudo pacman -S python python-pip git chromium
+
+# 2. Клонировать репозиторий
+git clone https://github.com/Pabloescoabros/alice-image-proxy.git
+cd alice-image-proxy
+
+# 3. Установить Python-зависимости
+pip install fastapi uvicorn[standard] playwright httpx pydantic
+
+# 4. Установить браузер Playwright
+python -m playwright install chromium
+```
+
+</details>
+
+<details>
+<summary>macOS</summary>
+
+```bash
+# 1. Установить Python (если нужен)
+brew install python@3.13
+
+# 2. Клонировать репозиторий
+git clone https://github.com/Pabloescoabros/alice-image-proxy.git
+cd alice-image-proxy
+
+# 3. Установить Python-зависимости
+pip install fastapi uvicorn[standard] playwright httpx pydantic
+
+# 4. Установить браузер Playwright
+python -m playwright install chromium
+
+# 5. Установить Chrome (если не установлен)
+brew install --cask google-chrome
+```
+
+</details>
 
 ## Быстрый старт
 
