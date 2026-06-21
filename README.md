@@ -1,25 +1,331 @@
-# Alice Yandex Proxy
+# Alice Yandex Proxy / Прокси Яндекс Алисы
 
-OpenAI-совместимый прокси-сервер для Яндекс Алисы. Оборачивает Алису в стандартный API формат, позволяет использовать несколько моделей через единую точку входа.
+**OpenAI-compatible API proxy for Yandex Alice** — wraps Alice into a standard API format with multiple models through a single endpoint.
+
+**OpenAI-совместимый прокси-сервер для Яндекс Алисы** — оборачивает Алису в стандартный API формат с несколькими моделями через единую точку входа.
+
+---
+
+## 🌐 Languages / Языки
+
+- [English](#english)
+- [Русский](#русский)
+
+---
+
+# English
+
+## Models
+
+| Model | Description |
+|-------|-------------|
+| `alice` | Base chat |
+| `alice-pro` | Advanced chat powered by YandexGPT 5 Pro |
+| `alice-search` | Deep research agent with internet access |
+| `alice-image` | Image generation |
+| `alice-vision` | Image analysis and description |
+| `alice-code` | Programming and coding tasks |
+
+## Features
+
+- Full OpenAI API compatibility (`/v1/chat/completions`, `/v1/images/generations`, `/v1/images/edits`, `/v1/vision/analyze`)
+- **Multi-session management** — separate Alice chat per model type with automatic rotation and context summarization
+- **Project system** — isolate sessions by project name, each project gets its own set of model sessions
+- **Unified media endpoint** — generate, edit, and analyze images in a single shared chat session for context continuity
+- **Auto prompt enhancement** — Russian prompts are automatically translated and enriched with quality-boosting keywords for image generation
+- **Streaming responses** — SSE-compatible streaming for chat completions
+- **Smart model detection** — automatically routes requests to the optimal model based on message content
+- **File management API** — read, write, and list files remotely
+- **Remote command execution** — run shell commands via API
+- **Free** — no API keys, no subscriptions, just a Yandex account
+
+## Requirements
+
+- Python 3.10+
+- Google Chrome (installed on the system)
+- Yandex account
+- Dependencies: `fastapi`, `uvicorn`, `playwright`, `httpx`, `pydantic`
+
+## Installation
+
+```bash
+# Clone
+git clone https://github.com/Pabloescoabros/alice-image-proxy.git
+cd alice-image-proxy
+
+# Install dependencies
+pip install fastapi uvicorn playwright httpx pydantic
+
+# Install browser
+playwright install chromium
+```
+
+## Quick Start
+
+```bash
+python server.py
+```
+
+Server starts on `http://localhost:8976` (configurable via `PORT` env var).
+
+### Authentication
+
+On first launch, Chrome opens automatically — log into your Yandex account manually. Cookies are saved for subsequent runs.
+
+Alternatively, set cookies via API:
+
+```bash
+curl -X POST http://localhost:8976/cookies \
+  -H "Content-Type: application/json" \
+  -d '{"cookie": "your_cookie_string_here"}'
+```
+
+Check authentication status:
+
+```bash
+curl http://localhost:8976/cookies/status
+```
+
+## API Reference
+
+### Chat Completions
+
+```bash
+curl -X POST http://localhost:8976/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "alice",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": false,
+    "project": "default"
+  }'
+```
+
+The `project` field isolates sessions — different projects get separate Alice chats per model. If the model is not specified, the proxy auto-detects the optimal model based on message content.
+
+### Image Generation
+
+```bash
+curl -X POST http://localhost:8976/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "cat at sunset, oil painting",
+    "model": "alice-image",
+    "n": 1,
+    "response_format": "url"
+  }'
+```
+
+`response_format`: `"url"` returns image URL, `"b64_json"` returns base64-encoded image.
+
+### Image Editing
+
+Two methods available:
+
+**Method 1 — Upload** (reliable): upload an image and describe changes.
+
+```bash
+curl -X POST http://localhost:8976/v1/images/edits \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "make the background darker",
+    "image_url": "https://example.com/image.jpg",
+    "method": "upload"
+  }'
+```
+
+**Method 2 — Button** (generate then edit): generates an image first, then edits via Alice's built-in edit button.
+
+```bash
+curl -X POST http://localhost:8976/v1/images/edits \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "add a hat to the cat",
+    "gen_prompt": "cute cat sitting on a windowsill",
+    "method": "button"
+  }'
+```
+
+### Vision / Image Analysis
+
+```bash
+curl -X POST http://localhost:8976/v1/vision/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/image.jpg",
+    "prompt": "Describe what you see in detail"
+  }'
+```
+
+Accepts `image` (base64) or `url`.
+
+### Unified Media Endpoint
+
+All media operations in one shared chat session for context continuity:
+
+```bash
+# Generate
+curl -X POST http://localhost:8976/v1/media/generate \
+  -H "Content-Type: application/json" \
+  -d '{"action": "generate", "prompt": "mountain landscape"}'
+
+# Edit last generated image via button
+curl -X POST http://localhost:8976/v1/media/generate \
+  -H "Content-Type: application/json" \
+  -d '{"action": "edit_button", "edit_prompt": "make it snowy"}'
+
+# Edit via upload
+curl -X POST http://localhost:8976/v1/media/generate \
+  -H "Content-Type: application/json" \
+  -d '{"action": "edit_upload", "edit_prompt": "add clouds", "url": "https://..."}'
+
+# Analyze image in the same session
+curl -X POST http://localhost:8976/v1/media/generate \
+  -H "Content-Type: application/json" \
+  -d '{"action": "vision", "url": "https://...", "prompt": "What colors dominate?"}'
+```
+
+### Media File Management
+
+```bash
+# List saved media files
+curl http://localhost:8976/v1/media/list
+
+# Delete a media file
+curl -X DELETE http://localhost:8976/v1/media/filename.jpg
+```
+
+### Projects
+
+```bash
+# List all projects
+curl http://localhost:8976/v1/projects
+
+# Create a project
+curl -X POST http://localhost:8976/v1/projects/my-project \
+  -H "Content-Type: application/json" \
+  -d '{"description": "My AI project"}'
+
+# Create sessions for a project
+curl -X POST http://localhost:8976/v1/projects/my-project/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"models": ["alice", "alice-code", "alice-image"]}'
+
+# Delete a project (closes all its sessions)
+curl -X DELETE http://localhost:8976/v1/projects/my-project
+```
+
+### Sessions
+
+```bash
+# List active sessions
+curl http://localhost:8976/v1/sessions
+
+# Force-rotate a session (summarize and start fresh)
+curl -X POST http://localhost:8976/v1/sessions/default:alice/rotate
+```
+
+### File Operations
+
+```bash
+# Write file
+curl -X POST http://localhost:8976/v1/files/write \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/tmp/test.txt", "content": "hello"}'
+
+# Read file
+curl -X POST http://localhost:8976/v1/files/read \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/tmp/test.txt"}'
+
+# List files
+curl -X POST http://localhost:8976/v1/files/list \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/tmp", "pattern": "*.txt"}'
+```
+
+### Remote Execution
+
+```bash
+curl -X POST http://localhost:8976/v1/execute \
+  -H "Content-Type: application/json" \
+  -d '{"command": "echo hello", "timeout": 10}'
+```
+
+### Health & Debug
+
+```bash
+curl http://localhost:8976/health    # server status, browser state, sessions
+curl http://localhost:8976/debug     # detailed debug info with screenshot path
+curl http://localhost:8976/v1/models # list available models
+```
+
+## Client Integration
+
+Works with any software supporting the OpenAI API format:
+
+- **Cursor** — set API base to `http://localhost:8976/v1`
+- **Hermes Agent** — add as a custom provider
+- **Open WebUI** — connect as an OpenAI endpoint
+- **Any HTTP client** — standard REST endpoints
+
+## Architecture
+
+```
+┌─────────────────┐     OpenAI API      ┌──────────────────┐    Playwright CDP    ┌─────────────────┐
+│   Your Client   │ ──────────────────▶  │  Alice Proxy     │ ──────────────────▶  │  Chrome/Alice   │
+│ (Cursor, CLI,   │ ◀──────────────────  │  (FastAPI:8976)  │ ◀──────────────────  │  (alice.yandex) │
+│  WebUI, etc.)   │     JSON/SSE         │                  │    DOM interaction   │                 │
+└─────────────────┘                      └──────────────────┘                      └─────────────────┘
+```
+
+The proxy launches Chrome with remote debugging, connects via CDP (Chrome DevTools Protocol) using Playwright, and interacts with alice.yandex.ru through DOM manipulation. Each model type gets its own isolated browser tab and Alice chat session. Sessions auto-rotate after 50 messages with context summarization.
+
+## Notes
+
+- Tested only via direct API requests. CLI/IDE/GUI client integration not fully validated — your mileage may vary
+- Active development — API may change between versions
+- Image generation uses Alice's internal model; prompts are auto-translated and enhanced
+- Session rotation happens automatically at 50 messages — the current chat is summarized, deleted, and a new one starts with the summary as context
+
+## License
+
+MIT
+
+---
+
+# Русский
 
 ## Модели
 
-- `alice` — базовый чат
-- `alice-pro` — продвинутый чат на YandexGPT 5 Pro
-- `alice-search` — агент глубокого ресёрча с доступом в интернет
-- `alice-image` — генерация изображений
-- `alice-vision` — анализ изображений
-- `alice-code` — задачи программирования
+| Модель | Описание |
+|--------|----------|
+| `alice` | Базовый чат |
+| `alice-pro` | Продвинутый чат на YandexGPT 5 Pro |
+| `alice-search` | Агент глубокого ресёрча с доступом в интернет |
+| `alice-image` | Генерация изображений |
+| `alice-vision` | Анализ и описание изображений |
+| `alice-code` | Задачи программирования |
 
 ## Возможности
 
 - Полная совместимость с OpenAI API (`/v1/chat/completions`, `/v1/images/generations`, `/v1/images/edits`, `/v1/vision/analyze`)
-- Автоматическая ротация сессий с суммаризацией контекста
-- Автоэнхансмент промптов для генерации изображений
-- Мульти-сессия — отдельный чат Алисы для каждого типа модели
-- Управление через API (сессии, файлы, команды)
-- Streaming responses
-- **Бесплатно** — нужен только аккаунт Яндекса
+- **Мульти-сессия** — отдельный чат Алисы для каждого типа модели с автоматической ротацией и суммаризацией контекста
+- **Система проектов** — изоляция сессий по имени проекта, каждый проект получает свой набор сессий моделей
+- **Единый медиа-эндпоинт** — генерация, редактирование и анализ изображений в одной общей чат-сессии для сохранения контекста
+- **Автоэнхансмент промптов** — русские промпты автоматически переводятся и обогащаются ключевыми словами для качественной генерации
+- **Стриминг ответов** — SSE-совместимый стриминг для чат-комплишенов
+- **Умное определение модели** — автоматическая маршрутизация запросов к оптимальной модели на основе содержимого сообщения
+- **Файловый API** — чтение, запись и список файлов удалённо
+- **Удалённое выполнение команд** — запуск shell-команд через API
+- **Бесплатно** — никаких API-ключей и подписок, нужен только аккаунт Яндекса
+
+## Требования
+
+- Python 3.10+
+- Google Chrome (установлен в системе)
+- Аккаунт Яндекса
+- Зависимости: `fastapi`, `uvicorn`, `playwright`, `httpx`, `pydantic`
 
 ## Установка
 
@@ -35,38 +341,48 @@ pip install fastapi uvicorn playwright httpx pydantic
 playwright install chromium
 ```
 
-## Запуск
+## Быстрый старт
 
 ```bash
 python server.py
 ```
 
-Сервер запустится на `http://localhost:8976`
-
-## Использование
+Сервер запустится на `http://localhost:8976` (настраивается через переменную окружения `PORT`).
 
 ### Авторизация
 
-Первый запуск потребует авторизации в Яндекс. Браузер откроется автоматически — войдите в аккаунт вручную. Cookies сохранятся для последующих запусков.
+При первом запуске Chrome откроется автоматически — войдите в аккаунт Яндекса вручную. Cookies сохраняются для последующих запусков.
 
 Также можно установить cookies через API:
 
 ```bash
 curl -X POST http://localhost:8976/cookies \
   -H "Content-Type: application/json" \
-  -d '{"cookie": "your_cookie_string_here"}'
+  -d '{"cookie": "ваша_cookie_строка"}'
 ```
 
-### Chat Completions
+Проверка статуса авторизации:
+
+```bash
+curl http://localhost:8976/cookies/status
+```
+
+## Справочник API
+
+### Чат-комплишены
 
 ```bash
 curl -X POST http://localhost:8976/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "alice",
-    "messages": [{"role": "user", "content": "Привет"}]
+    "messages": [{"role": "user", "content": "Привет"}],
+    "stream": false,
+    "project": "default"
   }'
 ```
+
+Поле `project` изолирует сессии — разные проекты получают отдельные чаты Алисы для каждой модели. Если модель не указана, прокси автоматически определяет оптимальную модель по содержимому сообщения.
 
 ### Генерация изображений
 
@@ -74,63 +390,184 @@ curl -X POST http://localhost:8976/v1/chat/completions \
 curl -X POST http://localhost:8976/v1/images/generations \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "кот на закате",
+    "prompt": "кот на закате, масляная живопись",
     "model": "alice-image",
-    "n": 1
+    "n": 1,
+    "response_format": "url"
   }'
 ```
 
-### Анализ изображений (Vision)
+`response_format`: `"url"` возвращает URL картинки, `"b64_json"` — base64-кодированное изображение.
+
+### Редактирование изображений
+
+Два метода:
+
+**Метод 1 — Upload** (надёжный): загрузить изображение и описать изменения.
+
+```bash
+curl -X POST http://localhost:8976/v1/images/edits \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "сделай фон темнее",
+    "image_url": "https://example.com/image.jpg",
+    "method": "upload"
+  }'
+```
+
+**Метод 2 — Button** (генерация + редактирование): сначала генерирует изображение, затем редактирует через встроенную кнопку Алисы.
+
+```bash
+curl -X POST http://localhost:8976/v1/images/edits \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "добавь коту шляпу",
+    "gen_prompt": "милый кот сидит на подоконнике",
+    "method": "button"
+  }'
+```
+
+### Зрение / Анализ изображений
 
 ```bash
 curl -X POST http://localhost:8976/v1/vision/analyze \
   -H "Content-Type: application/json" \
   -d '{
     "url": "https://example.com/image.jpg",
-    "prompt": "Опиши что видишь"
+    "prompt": "Опиши что видишь подробно"
   }'
 ```
 
-### Проверка здоровья
+Принимает `image` (base64) или `url`.
+
+### Единый медиа-эндпоинт
+
+Все операции с медиа в одной общей чат-сессии для сохранения контекста:
 
 ```bash
-curl http://localhost:8976/health
+# Генерация
+curl -X POST http://localhost:8976/v1/media/generate \
+  -H "Content-Type: application/json" \
+  -d '{"action": "generate", "prompt": "горный пейзаж"}'
+
+# Редактирование последнего изображения через кнопку
+curl -X POST http://localhost:8976/v1/media/generate \
+  -H "Content-Type: application/json" \
+  -d '{"action": "edit_button", "edit_prompt": "сделай зимним"}'
+
+# Редактирование через загрузку
+curl -X POST http://localhost:8976/v1/media/generate \
+  -H "Content-Type: application/json" \
+  -d '{"action": "edit_upload", "edit_prompt": "добавь облака", "url": "https://..."}'
+
+# Анализ изображения в той же сессии
+curl -X POST http://localhost:8976/v1/media/generate \
+  -H "Content-Type: application/json" \
+  -d '{"action": "vision", "url": "https://...", "prompt": "Какие цвета преобладают?"}'
+```
+
+### Управление медиа-файлами
+
+```bash
+# Список сохранённых медиа-файлов
+curl http://localhost:8976/v1/media/list
+
+# Удалить медиа-файл
+curl -X DELETE http://localhost:8976/v1/media/filename.jpg
+```
+
+### Проекты
+
+```bash
+# Список всех проектов
+curl http://localhost:8976/v1/projects
+
+# Создать проект
+curl -X POST http://localhost:8976/v1/projects/my-project \
+  -H "Content-Type: application/json" \
+  -d '{"description": "Мой AI проект"}'
+
+# Создать сессии для проекта
+curl -X POST http://localhost:8976/v1/projects/my-project/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"models": ["alice", "alice-code", "alice-image"]}'
+
+# Удалить проект (закрывает все его сессии)
+curl -X DELETE http://localhost:8976/v1/projects/my-project
+```
+
+### Сессии
+
+```bash
+# Список активных сессий
+curl http://localhost:8976/v1/sessions
+
+# Принудительная ротация сессии (суммаризация и начало заново)
+curl -X POST http://localhost:8976/v1/sessions/default:alice/rotate
+```
+
+### Файловые операции
+
+```bash
+# Записать файл
+curl -X POST http://localhost:8976/v1/files/write \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/tmp/test.txt", "content": "привет"}'
+
+# Прочитать файл
+curl -X POST http://localhost:8976/v1/files/read \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/tmp/test.txt"}'
+
+# Список файлов
+curl -X POST http://localhost:8976/v1/files/list \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/tmp", "pattern": "*.txt"}'
+```
+
+### Удалённое выполнение
+
+```bash
+curl -X POST http://localhost:8976/v1/execute \
+  -H "Content-Type: application/json" \
+  -d '{"command": "echo hello", "timeout": 10}'
+```
+
+### Здоровье и отладка
+
+```bash
+curl http://localhost:8976/health    # статус сервера, состояние браузера, сессии
+curl http://localhost:8976/debug     # детальная отладка с путём к скриншоту
+curl http://localhost:8976/v1/models # список доступных моделей
 ```
 
 ## Подключение к клиентам
 
-Работает с любым софтом поддерживающим OpenAI API формат:
+Работает с любым софтом, поддерживающим OpenAI API формат:
 
 - **Cursor** — в настройках API укажите `http://localhost:8976/v1`
 - **Hermes Agent** — добавьте как кастомный провайдер
 - **Open WebUI** — подключите как OpenAI endpoint
-- **Любой HTTP-клиент** — стандартные эндпоинты
+- **Любой HTTP-клиент** — стандартные REST-эндпоинты
 
-## API Endpoints
+## Архитектура
 
-| Endpoint | Метод | Описание |
-|----------|-------|----------|
-| `/v1/chat/completions` | POST | Чат с моделями |
-| `/v1/images/generations` | POST | Генерация картинок |
-| `/v1/images/edits` | POST | Редактирование картинок |
-| `/v1/vision/analyze` | POST | Анализ изображений |
-| `/v1/models` | GET | Список моделей |
-| `/v1/sessions` | GET | Активные сессии |
-| `/v1/sessions/{model}/rotate` | POST | Ротация сессии |
-| `/health` | GET | Статус сервера |
-| `/cookies` | POST | Установить cookies |
+```
+┌─────────────────┐     OpenAI API      ┌──────────────────┐    Playwright CDP    ┌─────────────────┐
+│   Ваш клиент    │ ──────────────────▶  │  Alice Proxy     │ ──────────────────▶  │  Chrome/Alice   │
+│ (Cursor, CLI,   │ ◀──────────────────  │  (FastAPI:8976)  │ ◀──────────────────  │  (alice.yandex) │
+│  WebUI и т.д.)  │     JSON/SSE         │                  │    DOM-взаимодействие│                 │
+└─────────────────┘                      └──────────────────┘                      └─────────────────┘
+```
 
-## Требования
-
-- Python 3.10+
-- Google Chrome (установлен в системе)
-- Аккаунт Яндекса
+Прокси запускает Chrome с удалённой отладкой, подключается через CDP (Chrome DevTools Protocol) с помощью Playwright и взаимодействует с alice.yandex.ru через DOM-манипуляции. Каждый тип модели получает свою изолированную вкладку браузера и чат-сессию Алисы. Сессии автоматически ротируются после 50 сообщений с суммаризацией контекста.
 
 ## Примечания
 
-- Тестировалось только через прямые запросы к API. В CLI/IDE/GUI клиентах не обкатывалось — могут быть нюансы
-- Проект в активной разработке, API может меняться
-- Для генерации изображений Алиса использует свою внутреннюю модель, промпты автоматически переводятся и улучшаются
+- Тестировалось только через прямые запросы к API. Интеграция с CLI/IDE/GUI клиентами полностью не валидирована — могут быть нюансы
+- Активная разработка — API может меняться между версиями
+- Генерация изображений использует внутреннюю модель Алисы; промпты автоматически переводятся и улучшаются
+- Ротация сессий происходит автоматически на 50 сообщениях — текущий чат суммаризируется, удаляется, и начинается новый с кратким описанием предыдущего контекста
 
 ## Лицензия
 
