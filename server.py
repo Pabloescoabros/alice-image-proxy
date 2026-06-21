@@ -61,10 +61,16 @@ MODEL_CONFIGS = {
 class ChatSession:
     session_id: str
     model: str
+    project: str = "default"
     message_count: int = 0
     created_at: float = field(default_factory=time.time)
     last_active: float = field(default_factory=time.time)
     summary: str = ""
+
+    @property
+    def key(self) -> str:
+        """Unique session key: project:model"""
+        return f"{self.project}:{self.model}"
 
     def needs_rotation(self) -> bool:
         return self.message_count >= MAX_MESSAGES_PER_SESSION
@@ -72,6 +78,11 @@ class ChatSession:
     def touch(self):
         self.message_count += 1
         self.last_active = time.time()
+
+    def first_message(self) -> str:
+        """First message sent to Alice to name the chat (project + model)."""
+        model_label = self.model.replace("alice-", "").replace("alice", "chat")
+        return f"[{self.project}] {model_label}"
 
 
 class AliceRPC:
@@ -262,11 +273,15 @@ class AliceBrowser:
         except Exception as e:
             log.error(f"Save cookies failed: {e}")
 
-    async def _get_page_for_model(self, model: str) -> object:
-        if model in self.session_pages:
-            page = self.session_pages[model]
+    async def _get_page_for_model(self, model: str, project: str = "default") -> object:
+        """Get or create a browser page for a project:model session."""
+        session_key = f"{project}:{model}"
+        # Extract base model for URL config (handle project:model format)
+        base_model = model.split(":")[-1] if ":" in model else model
+
+        if session_key in self.session_pages:
+            page = self.session_pages[session_key]
             if not page.is_closed():
-                # Verify page is still alive and on alice
                 try:
                     url = page.url
                     body_len = await page.evaluate("document.body ? document.body.innerText.length : 0")
@@ -274,17 +289,15 @@ class AliceBrowser:
                         return page
                 except:
                     pass
-                # Page died or went blank, remove and recreate
-                log.warning(f"Page for {model} is dead, recreating")
+                log.warning(f"Page for {session_key} is dead, recreating")
                 try:
                     await page.close()
                 except:
                     pass
 
-        config = MODEL_CONFIGS.get(model, MODEL_CONFIGS["alice"])
+        config = MODEL_CONFIGS.get(base_model, MODEL_CONFIGS["alice"])
         page = await self.context.new_page()
 
-        # Navigate and wait for full load
         await page.goto(config["url"], wait_until="domcontentloaded", timeout=45000)
         await asyncio.sleep(5)
 
@@ -292,12 +305,11 @@ class AliceBrowser:
         if body_len < 50:
             await asyncio.sleep(10)
 
-        # Always start a fresh chat on this page to ensure isolation
         await self._start_new_chat(page)
         await asyncio.sleep(2)
 
-        self.session_pages[model] = page
-        log.info(f"Created isolated page for {model}: {config['url']}")
+        self.session_pages[session_key] = page
+        log.info(f"Created isolated page for {session_key}: {config['url']}")
         return page
 
     async def _start_new_chat(self, page: object):
@@ -602,22 +614,23 @@ class AliceBrowser:
             log.warning(f"Delete old chat failed: {e}")
             return False
 
-    async def _summarize_and_rotate(self, model: str):
+    async def _summarize_and_rotate(self, model: str, project: str = "default"):
         """Summarize current chat, delete old, start new with summary."""
-        session = self.sessions.get(model)
+        session_key = f"{project}:{model}"
+        session = self.sessions.get(session_key)
         if not session:
             return
 
-        page = await self._get_page_for_model(model)
+        page = await self._get_page_for_model(model, project)
 
         # Ask Alice to summarize
         await self._send_message(page, "Кратко.summarize наш разговор: что обсуждали, какие решения приняты, какие задачи остались? Ответь в 3-5 предложениях.")
         try:
             summary = await self._wait_for_response(page, timeout=60)
             session.summary = summary
-            log.info(f"Summary: {summary[:100]}...")
+            log.info(f"Summary [{session_key}]: {summary[:100]}...")
         except Exception as e:
-            log.error(f"Summarize failed: {e}")
+            log.error(f"Summarize failed [{session_key}]: {e}")
             session.summary = f"Предыдущая сессия ({session.message_count} сообщений)"
 
         # Delete old chat
@@ -627,49 +640,55 @@ class AliceBrowser:
         await self._start_new_chat(page)
         await asyncio.sleep(1)
 
-        # Send summary as first message for context continuity
+        # Combine naming + summary into one message (first message = chat name in sidebar)
         if session.summary:
-            await self._send_message(page, f"[Context from previous conversation]: {session.summary}")
+            combined = f"[{project}:{model}] [Context from previous conversation]: {session.summary}"
+            await self._send_message(page, combined)
             await asyncio.sleep(3)
 
         # Reset session counter
         session.session_id = str(uuid.uuid4().hex[:8])
         session.message_count = 0
-        log.info(f"Rotated {model} → new session {session.session_id}")
+        log.info(f"Rotated {session_key} → new session {session.session_id}")
 
-    async def chat_with_model(self, model: str, message: str, timeout: int = 120) -> str:
+    async def chat_with_model(self, model: str, message: str, timeout: int = 120, project: str = "default") -> str:
         """Send message to Alice's chat for this model. Alice handles history natively."""
         async with self._lock:
             await self.ensure_started()
 
+            session_key = f"{project}:{model}"
+
             # Create session if new
-            is_new = model not in self.sessions
+            is_new = session_key not in self.sessions
             if is_new:
-                self.sessions[model] = ChatSession(
+                self.sessions[session_key] = ChatSession(
                     session_id=str(uuid.uuid4().hex[:8]),
                     model=model,
+                    project=project,
                 )
 
-            session = self.sessions[model]
+            session = self.sessions[session_key]
 
             # Rotate if needed BEFORE sending
             if session.needs_rotation():
-                log.info(f"Rotating session for {model} ({session.message_count} msgs)")
-                await self._summarize_and_rotate(model)
+                log.info(f"Rotating session for {session_key} ({session.message_count} msgs)")
+                await self._summarize_and_rotate(model, project)
 
-            page = await self._get_page_for_model(model)
+            page = await self._get_page_for_model(model, project)
 
-            # For new sessions, start a fresh chat to ensure isolation
+            # For new sessions, start a fresh chat
             if is_new:
                 await self._start_new_chat(page)
                 await asyncio.sleep(1)
+                # Prepend project info to first message (becomes chat name in sidebar)
+                message = f"[{project}:{model}] {message}"
 
             # Send message — Alice remembers history natively in this chat
             await self._send_message(page, message)
             session.touch()
 
             response = await self._wait_for_response(page, timeout)
-            log.info(f"[{model}] msgs={session.message_count}, response={response[:80]}")
+            log.info(f"[{session_key}] msgs={session.message_count}, response={response[:80]}")
             return response
 
     def _rewrite_image_prompt(self, raw_prompt: str) -> str:
@@ -731,10 +750,10 @@ class AliceBrowser:
         log.info(f"Enhanced prompt: {enhanced}")
         return enhanced
 
-    async def generate_image_with_model(self, model: str, prompt: str, timeout: int = 120, new_chat: bool = True) -> dict:
+    async def generate_image_with_model(self, model: str, prompt: str, timeout: int = 120, new_chat: bool = True, project: str = "default") -> dict:
         async with self._lock:
             await self.ensure_started()
-            page = await self._get_page_for_model(model)
+            page = await self._get_page_for_model(model, project)
             if new_chat:
                 await self._start_new_chat(page)
                 await asyncio.sleep(1)
@@ -773,7 +792,7 @@ class AliceBrowser:
                 "size": len(img_bytes),
             }
 
-    async def send_with_image(self, model: str, message: str, image_b64: str = None, image_path: str = None, timeout: int = 120, new_chat: bool = True) -> str:
+    async def send_with_image(self, model: str, message: str, image_b64: str = None, image_path: str = None, timeout: int = 120, new_chat: bool = True, project: str = "default") -> str:
         async with self._lock:
             await self.ensure_started()
 
@@ -785,7 +804,7 @@ class AliceBrowser:
                 image_path = str(tmp)
                 log.info(f"Saved upload image: {tmp} ({len(img_bytes)} bytes)")
 
-            page = await self._get_page_for_model(model)
+            page = await self._get_page_for_model(model, project)
 
             if new_chat:
                 await self._start_new_chat(page)
@@ -975,11 +994,11 @@ class AliceBrowser:
 
         raise HTTPException(504, "Edited image timeout — no new image appeared after edit")
 
-    async def generate_and_edit(self, model: str, gen_prompt: str, edit_prompt: str, timeout: int = 120, new_chat: bool = True) -> dict:
+    async def generate_and_edit(self, model: str, gen_prompt: str, edit_prompt: str, timeout: int = 120, new_chat: bool = True, project: str = "default") -> dict:
         """Generate image, then edit it via the UI edit button. Both prompts enhanced to English."""
         async with self._lock:
             await self.ensure_started()
-            page = await self._get_page_for_model(model)
+            page = await self._get_page_for_model(model, project)
             if new_chat:
                 await self._start_new_chat(page)
                 await asyncio.sleep(1)
@@ -1040,7 +1059,9 @@ class AliceBrowser:
     async def get_session_info(self) -> List[Dict]:
         return [{
             "session_id": s.session_id,
-            "model": m,
+            "session_key": m,
+            "project": s.project,
+            "model": s.model,
             "message_count": s.message_count,
             "created_at": datetime.fromtimestamp(s.created_at).isoformat(),
             "last_active": datetime.fromtimestamp(s.last_active).isoformat(),
@@ -1093,6 +1114,7 @@ class ChatRequest(BaseModel):
     temperature: float = 0.7
     max_tokens: int = 4096
     stream: bool = False
+    project: str = "default"
 
 class ChatChoice(BaseModel):
     index: int
@@ -1222,12 +1244,12 @@ async def list_sessions():
     return {"sessions": await alice_browser.get_session_info()}
 
 
-@app.post("/v1/sessions/{model}/rotate")
-async def rotate_session(model: str):
-    if model not in alice_browser.sessions:
-        raise HTTPException(404, f"No session for {model}")
-    await alice_browser._summarize_and_rotate(model)
-    session = alice_browser.sessions[model]
+@app.post("/v1/sessions/{session_key}/rotate")
+async def rotate_session(session_key: str):
+    if session_key not in alice_browser.sessions:
+        raise HTTPException(404, f"No session for {session_key}")
+    session = alice_browser.sessions[session_key]
+    await alice_browser._summarize_and_rotate(session.model, session.project)
     return {"status": "rotated", "new_session_id": session.session_id, "summary": session.summary}
 
 
@@ -1259,7 +1281,7 @@ async def chat_completions(req: ChatRequest):
 
     try:
         if is_image_gen and not is_vision:
-            result = await alice_browser.generate_image_with_model("alice-image", text)
+            result = await alice_browser.generate_image_with_model("alice-image", text, project=req.project)
             response_text = f"![Generated image]({result['url']})"
             if req.stream:
                 return StreamingResponse(stream_text(response_text, resp_id, req.model), media_type="text/event-stream")
@@ -1274,6 +1296,7 @@ async def chat_completions(req: ChatRequest):
                 target_model,
                 text or "Что ты видишь на этом изображении?",
                 image_b64=images[0] if images else None,
+                project=req.project,
             )
             if req.stream:
                 return StreamingResponse(stream_text(response_text, resp_id, req.model), media_type="text/event-stream")
@@ -1285,7 +1308,7 @@ async def chat_completions(req: ChatRequest):
 
         # Regular chat — just send the user's last message
         # Alice handles history natively in her chat session
-        response_text = await alice_browser.chat_with_model(target_model, text)
+        response_text = await alice_browser.chat_with_model(target_model, text, project=req.project)
 
         if req.stream:
             return StreamingResponse(stream_text(response_text, resp_id, req.model), media_type="text/event-stream")
@@ -1304,8 +1327,9 @@ async def chat_completions(req: ChatRequest):
 
 @app.post("/v1/images/generations", response_model=ImageResponse)
 async def generate_images(req: ImageRequest):
+    project = req.project if hasattr(req, 'project') else "default"
     try:
-        result = await alice_browser.generate_image_with_model(req.model, req.prompt)
+        result = await alice_browser.generate_image_with_model(req.model, req.prompt, project=project)
         img_data = ImageData(revised_prompt=result["revised_prompt"])
         if req.response_format == "b64_json":
             img_data.b64_json = result["b64_json"]
@@ -1328,6 +1352,7 @@ async def edit_image(req: Request):
     image_path = body.get("image_path", "")
     model = body.get("model", "alice-pro")
     method = body.get("method", "upload")  # "upload" or "button"
+    project = body.get("project", "default")
 
     # Enhance edit prompt to English
     enhanced_prompt = alice_browser._rewrite_image_prompt(prompt) if prompt else prompt
@@ -1341,7 +1366,7 @@ async def edit_image(req: Request):
         if not gen_prompt:
             raise HTTPException(400, "gen_prompt required for button method")
         try:
-            result = await alice_browser.generate_and_edit(model, gen_prompt, prompt)
+            result = await alice_browser.generate_and_edit(model, gen_prompt, prompt, project=project)
             return {"edited_url": result["edited_url"], "original_url": result["original_url"], "gen_prompt": result["gen_prompt"], "edit_prompt": result["edit_prompt"]}
         except Exception as e:
             raise HTTPException(500, str(e))
@@ -1370,6 +1395,7 @@ async def edit_image(req: Request):
             model, edit_msg,
             image_b64=image_b64 if image_b64 else None,
             image_path=image_path if image_path and not image_b64 else None,
+            project=project,
         )
         return {"response": response, "enhanced_prompt": enhanced_prompt}
     except Exception as e:
@@ -1382,6 +1408,7 @@ async def vision_analyze(req: Request):
     image_b64 = body.get("image", "")
     image_url = body.get("url", "")
     model = body.get("model", "alice-vision")
+    project = body.get("project", "default")
     prompt = body.get("prompt", "Опиши это изображение подробно: что видишь, цвета, композиция, настроение, стиль и любые заметные элементы.")
 
     if image_url and not image_b64:
@@ -1406,6 +1433,7 @@ async def vision_analyze(req: Request):
             model,
             prompt,
             image_b64=image_b64,
+            project=project,
         )
         return {"description": response}
     except Exception as e:
@@ -1419,13 +1447,36 @@ async def media_generate(req: Request):
     body = await req.json()
     action = body.get("action", "generate")  # generate, edit_button, edit_upload, vision
     prompt = body.get("prompt", "")
+    project = body.get("project", "default")
     model = "alice-media"
+
+    # Ensure project session exists and create page if new
+    session_key = f"{project}:{model}"
+    is_new_media_session = session_key not in alice_browser.sessions
+    if is_new_media_session:
+        alice_browser.sessions[session_key] = ChatSession(
+            session_id=str(uuid.uuid4().hex[:8]),
+            model=model,
+            project=project,
+        )
+        # Create page and start new chat (no naming message — prefix goes into first action)
+        async with alice_browser._lock:
+            await alice_browser.ensure_started()
+            page = await alice_browser._get_page_for_model(model, project)
+            await alice_browser._start_new_chat(page)
+            await asyncio.sleep(1)
+            log.info(f"Media session created: {session_key}")
+
+    # Prefix for first message (becomes chat name in sidebar)
+    naming_prefix = f"[{project}:{model}] " if is_new_media_session else ""
 
     if action == "generate":
         if not prompt:
             raise HTTPException(400, "prompt required")
         try:
-            result = await alice_browser.generate_image_with_model(model, prompt, new_chat=False)
+            # Prepend naming prefix so first message becomes chat name
+            full_prompt = f"{naming_prefix}{prompt}" if naming_prefix else prompt
+            result = await alice_browser.generate_image_with_model(model, full_prompt, new_chat=False, project=project)
             return {
                 "action": "generate",
                 "url": result["url"],
@@ -1445,7 +1496,7 @@ async def media_generate(req: Request):
             english_edit = alice_browser._rewrite_image_prompt(edit_prompt)
             async with alice_browser._lock:
                 await alice_browser.ensure_started()
-                page = await alice_browser._get_page_for_model(model)
+                page = await alice_browser._get_page_for_model(model, project)
                 edited_url = await alice_browser._edit_via_button(page, english_edit)
                 edited_local = await alice_browser._download_image_to_media(edited_url, "edited")
             return {
@@ -1482,9 +1533,9 @@ async def media_generate(req: Request):
 
         enhanced = alice_browser._rewrite_image_prompt(edit_prompt)
         try:
-            edit_msg = f"Измени: {enhanced}"
+            edit_msg = f"{naming_prefix}Измени: {enhanced}"
             response = await alice_browser.send_with_image(
-                model, edit_msg, image_b64=image_b64, new_chat=False,
+                model, edit_msg, image_b64=image_b64, new_chat=False, project=project,
             )
             return {"action": "edit_upload", "response": response, "edit_prompt": enhanced}
         except Exception as e:
@@ -1516,8 +1567,9 @@ async def media_generate(req: Request):
             raise HTTPException(400, "image (base64) or url required")
 
         try:
+            vision_prompt = f"{naming_prefix}{vision_prompt}" if naming_prefix else vision_prompt
             response = await alice_browser.send_with_image(
-                model, vision_prompt, image_b64=image_b64, new_chat=False,
+                model, vision_prompt, image_b64=image_b64, new_chat=False, project=project,
             )
             return {"action": "vision", "description": response}
         except Exception as e:
@@ -1552,6 +1604,103 @@ async def media_delete(filename: str):
         raise HTTPException(400, "Invalid filename")
     target.unlink()
     return {"status": "deleted", "file": filename}
+
+
+PROJECTS_FILE = STATE_DIR / "projects.json"
+
+def load_projects() -> dict:
+    if PROJECTS_FILE.exists():
+        try:
+            return json.loads(PROJECTS_FILE.read_text(encoding="utf-8"))
+        except:
+            pass
+    return {}
+
+def save_projects(projects: dict):
+    PROJECTS_FILE.write_text(json.dumps(projects, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+@app.get("/v1/projects")
+async def list_projects():
+    """List all known projects and their sessions."""
+    projects = load_projects()
+    active_sessions = await alice_browser.get_session_info()
+    # Group sessions by project
+    for s in active_sessions:
+        proj = s["project"]
+        if proj not in projects:
+            projects[proj] = {"created": datetime.now().isoformat(), "models": []}
+        if s["model"] not in projects[proj]["models"]:
+            projects[proj]["models"].append(s["model"])
+    return {"projects": projects, "active_sessions": active_sessions}
+
+
+@app.post("/v1/projects/{project}")
+async def create_project(project: str, req: Request = None):
+    """Register a new project. Body optional: {"description": "..."}"""
+    projects = load_projects()
+    desc = ""
+    if req:
+        try:
+            body = await req.json()
+            desc = body.get("description", "")
+        except:
+            pass
+    projects[project] = {
+        "created": datetime.now().isoformat(),
+        "description": desc,
+        "models": [],
+    }
+    save_projects(projects)
+    return {"status": "created", "project": project}
+
+
+@app.delete("/v1/projects/{project}")
+async def delete_project(project: str):
+    """Remove a project registration and close its sessions."""
+    projects = load_projects()
+    if project not in projects:
+        raise HTTPException(404, f"Project not found: {project}")
+    del projects[project]
+    save_projects(projects)
+    # Close all sessions for this project
+    keys_to_remove = [k for k, s in alice_browser.sessions.items() if s.project == project]
+    for k in keys_to_remove:
+        page_key = k
+        if page_key in alice_browser.session_pages:
+            try:
+                await alice_browser.session_pages[page_key].close()
+            except:
+                pass
+            del alice_browser.session_pages[page_key]
+        del alice_browser.sessions[k]
+    return {"status": "deleted", "project": project, "sessions_closed": len(keys_to_remove)}
+
+
+@app.post("/v1/projects/{project}/sessions")
+async def create_project_session(project: str, req: Request):
+    """Create sessions for a project. Body: {"models": ["alice", "alice-code", ...]}"""
+    body = await req.json()
+    models = body.get("models", ["alice"])
+    projects = load_projects()
+    if project not in projects:
+        projects[project] = {"created": datetime.now().isoformat(), "description": "", "models": []}
+
+    created = []
+    for m in models:
+        session_key = f"{project}:{m}"
+        if session_key not in alice_browser.sessions:
+            alice_browser.sessions[session_key] = ChatSession(
+                session_id=str(uuid.uuid4().hex[:8]),
+                model=m,
+                project=project,
+            )
+            if m not in projects[project].get("models", []):
+                projects[project].setdefault("models", []).append(m)
+            created.append(session_key)
+
+    save_projects(projects)
+    return {"status": "ok", "created": created, "project": project}
 
 
 @app.post("/cookies")
