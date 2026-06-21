@@ -50,7 +50,7 @@
 
 ### Quick Start (recommended)
 
-The project includes an automatic setup checker that verifies all prerequisites and installs missing dependencies:
+The project includes a beautiful setup checker with colored output, progress bars, and spinners:
 
 ```bash
 # Clone
@@ -470,7 +470,7 @@ MIT
 
 ### Быстрый старт (рекомендуется)
 
-В проект включён автоматический чекер установки — проверяет все зависимости и устанавливает недостающее:
+В проект включён красивый чекер установки с цветным выводом, прогресс-барами и спиннерами — проверяет все зависимости и устанавливает недостающее:
 
 ```bash
 # Клонировать
