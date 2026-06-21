@@ -30,10 +30,12 @@ PROJECT_DIR = Path(__file__).parent
 STATE_DIR   = PROJECT_DIR / "state"
 COOKIE_FILE = PROJECT_DIR / "cookies.txt"
 IMAGE_CACHE = PROJECT_DIR / "cache"
+MEDIA_DIR   = PROJECT_DIR / "media"
 LOG_FILE    = PROJECT_DIR / "alice_proxy.log"
 
 STATE_DIR.mkdir(exist_ok=True)
 IMAGE_CACHE.mkdir(exist_ok=True)
+MEDIA_DIR.mkdir(exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,8 +51,9 @@ MODEL_CONFIGS = {
     "alice-pro":    {"url": "https://alice.yandex.ru/?model=pro", "description": "Advanced chat (Pro)"},
     "alice-search": {"url": "https://alice.yandex.ru/?model=alice-agents-deep-research", "description": "Deep research"},
     "alice-image":  {"url": "https://alice.yandex.ru/?draw_picture=1", "description": "Image generation"},
-    "alice-vision": {"url": "https://alice.yandex.ru/?model=pro", "description": "Image analysis"},
+    "alice-vision": {"url": "https://alice.yandex.ru/?draw_picture=1", "description": "Image analysis"},
     "alice-code":   {"url": "https://alice.yandex.ru/?model=pro", "description": "Coding tasks"},
+    "alice-media":  {"url": "https://alice.yandex.ru/?draw_picture=1", "description": "Unified: generation, editing, vision"},
 }
 
 
@@ -728,12 +731,13 @@ class AliceBrowser:
         log.info(f"Enhanced prompt: {enhanced}")
         return enhanced
 
-    async def generate_image_with_model(self, model: str, prompt: str, timeout: int = 120) -> dict:
+    async def generate_image_with_model(self, model: str, prompt: str, timeout: int = 120, new_chat: bool = True) -> dict:
         async with self._lock:
             await self.ensure_started()
             page = await self._get_page_for_model(model)
-            await self._start_new_chat(page)
-            await asyncio.sleep(1)
+            if new_chat:
+                await self._start_new_chat(page)
+                await asyncio.sleep(1)
 
             # Enhance prompt locally into high-quality English
             english_prompt = self._rewrite_image_prompt(prompt)
@@ -753,34 +757,39 @@ class AliceBrowser:
                 raise HTTPException(500, "Downloaded image is too small/corrupted")
 
             img_hash = hashlib.md5(img_bytes).hexdigest()
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             cache_path = IMAGE_CACHE / f"{img_hash}.jpg"
+            media_path = MEDIA_DIR / f"gen_{timestamp}_{img_hash[:8]}.jpg"
             cache_path.write_bytes(img_bytes)
-            log.info(f"Image cached: {cache_path} ({len(img_bytes)} bytes)")
+            media_path.write_bytes(img_bytes)
+            log.info(f"Image saved: {media_path} ({len(img_bytes)} bytes)")
 
             return {
                 "url": image_url,
-                "local_path": str(cache_path),
+                "local_path": str(media_path),
+                "cache_path": str(cache_path),
                 "b64_json": base64.b64encode(img_bytes).decode("ascii"),
                 "revised_prompt": english_prompt,
                 "size": len(img_bytes),
             }
 
-    async def send_with_image(self, model: str, message: str, image_b64: str = None, image_path: str = None, timeout: int = 120) -> str:
+    async def send_with_image(self, model: str, message: str, image_b64: str = None, image_path: str = None, timeout: int = 120, new_chat: bool = True) -> str:
         async with self._lock:
             await self.ensure_started()
 
             if image_b64:
                 img_bytes = base64.b64decode(image_b64)
-                tmp = IMAGE_CACHE / f"upload_{uuid.uuid4().hex[:8]}.jpg"
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                tmp = MEDIA_DIR / f"upload_{timestamp}_{uuid.uuid4().hex[:8]}.jpg"
                 tmp.write_bytes(img_bytes)
                 image_path = str(tmp)
-                log.info(f"Saved upload image: {len(img_bytes)} bytes")
+                log.info(f"Saved upload image: {tmp} ({len(img_bytes)} bytes)")
 
             page = await self._get_page_for_model(model)
 
-            # Start new chat for vision
-            await self._start_new_chat(page)
-            await asyncio.sleep(2)
+            if new_chat:
+                await self._start_new_chat(page)
+                await asyncio.sleep(2)
 
             uploaded = False
             if image_path and Path(image_path).exists() and Path(image_path).stat().st_size > 500:
@@ -947,13 +956,14 @@ class AliceBrowser:
 
         raise HTTPException(504, "Edited image timeout — no new image appeared after edit")
 
-    async def generate_and_edit(self, model: str, gen_prompt: str, edit_prompt: str, timeout: int = 120) -> dict:
+    async def generate_and_edit(self, model: str, gen_prompt: str, edit_prompt: str, timeout: int = 120, new_chat: bool = True) -> dict:
         """Generate image, then edit it via the UI edit button. Both prompts enhanced to English."""
         async with self._lock:
             await self.ensure_started()
             page = await self._get_page_for_model(model)
-            await self._start_new_chat(page)
-            await asyncio.sleep(1)
+            if new_chat:
+                await self._start_new_chat(page)
+                await asyncio.sleep(1)
 
             # Enhance generation prompt
             english_gen = self._rewrite_image_prompt(gen_prompt)
@@ -967,12 +977,36 @@ class AliceBrowser:
             # Click edit button and enter prompt — returns new image URL
             edited_image_url = await self._edit_via_button(page, english_edit, timeout)
 
+            # Download edited image to media/
+            edited_local = await self._download_image_to_media(edited_image_url, "edited")
+
             return {
                 "gen_prompt": english_gen,
                 "edit_prompt": english_edit,
                 "original_url": image_url,
                 "edited_url": edited_image_url,
+                "edited_local_path": edited_local,
             }
+
+    async def _download_image_to_media(self, url: str, prefix: str = "img") -> str:
+        """Download image from URL and save to media/ folder."""
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+                resp.raise_for_status()
+                img_bytes = resp.content
+            if len(img_bytes) < 500:
+                return ""
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            img_hash = hashlib.md5(img_bytes).hexdigest()[:8]
+            media_path = MEDIA_DIR / f"{prefix}_{timestamp}_{img_hash}.jpg"
+            media_path.write_bytes(img_bytes)
+            log.info(f"Downloaded to media: {media_path} ({len(img_bytes)} bytes)")
+            return str(media_path)
+        except Exception as e:
+            log.warning(f"Download to media failed: {e}")
+            return ""
 
     async def take_screenshot(self) -> str:
         if not self.page or self.page.is_closed():
@@ -1357,6 +1391,145 @@ async def vision_analyze(req: Request):
         return {"description": response}
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+@app.post("/v1/media/generate")
+async def media_generate(req: Request):
+    """Unified media endpoint: generate, edit, and analyze images in ONE chat session.
+    All operations share the same alice-media page for context continuity."""
+    body = await req.json()
+    action = body.get("action", "generate")  # generate, edit_button, edit_upload, vision
+    prompt = body.get("prompt", "")
+    model = "alice-media"
+
+    if action == "generate":
+        if not prompt:
+            raise HTTPException(400, "prompt required")
+        try:
+            result = await alice_browser.generate_image_with_model(model, prompt, new_chat=False)
+            return {
+                "action": "generate",
+                "url": result["url"],
+                "local_path": result["local_path"],
+                "b64_json": result["b64_json"],
+                "revised_prompt": result["revised_prompt"],
+            }
+        except Exception as e:
+            raise HTTPException(500, str(e))
+
+    elif action == "edit_button":
+        edit_prompt = body.get("edit_prompt", prompt)
+        if not edit_prompt:
+            raise HTTPException(400, "edit_prompt required")
+        try:
+            # Use the existing page (no new chat) — edit the last generated image
+            english_edit = alice_browser._rewrite_image_prompt(edit_prompt)
+            async with alice_browser._lock:
+                await alice_browser.ensure_started()
+                page = await alice_browser._get_page_for_model(model)
+                edited_url = await alice_browser._edit_via_button(page, english_edit)
+                edited_local = await alice_browser._download_image_to_media(edited_url, "edited")
+            return {
+                "action": "edit_button",
+                "edited_url": edited_url,
+                "edited_local_path": edited_local,
+                "edit_prompt": english_edit,
+            }
+        except Exception as e:
+            raise HTTPException(500, str(e))
+
+    elif action == "edit_upload":
+        image_b64 = body.get("image", "")
+        image_url = body.get("url", "")
+        edit_prompt = body.get("edit_prompt", prompt)
+        if not edit_prompt:
+            raise HTTPException(400, "edit_prompt required")
+        if not image_b64 and not image_url:
+            raise HTTPException(400, "image (base64) or url required")
+
+        if image_url and not image_b64:
+            import httpx
+            try:
+                async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                    resp = await client.get(image_url, headers={"User-Agent": "Mozilla/5.0"})
+                    if resp.status_code == 200:
+                        image_b64 = base64.b64encode(resp.content).decode("ascii")
+                    else:
+                        raise HTTPException(400, f"Failed to download image: HTTP {resp.status_code}")
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(400, f"Download failed: {e}")
+
+        enhanced = alice_browser._rewrite_image_prompt(edit_prompt)
+        try:
+            edit_msg = f"Edit this image: {enhanced}. Apply the changes and return the result."
+            response = await alice_browser.send_with_image(
+                model, edit_msg, image_b64=image_b64, new_chat=False,
+            )
+            return {"action": "edit_upload", "response": response, "edit_prompt": enhanced}
+        except Exception as e:
+            raise HTTPException(500, str(e))
+
+    elif action == "vision":
+        image_b64 = body.get("image", "")
+        image_url = body.get("url", "")
+        vision_prompt = body.get("vision_prompt", prompt or "Describe this image in detail.")
+
+        if image_url and not image_b64:
+            import httpx
+            try:
+                async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                    resp = await client.get(image_url, headers={"User-Agent": "Mozilla/5.0"})
+                    if resp.status_code == 200:
+                        image_b64 = base64.b64encode(resp.content).decode("ascii")
+                    else:
+                        raise HTTPException(400, f"Failed to download image: HTTP {resp.status_code}")
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(400, f"Download failed: {e}")
+
+        if not image_b64:
+            raise HTTPException(400, "image (base64) or url required")
+
+        try:
+            response = await alice_browser.send_with_image(
+                model, vision_prompt, image_b64=image_b64, new_chat=False,
+            )
+            return {"action": "vision", "description": response}
+        except Exception as e:
+            raise HTTPException(500, str(e))
+
+    else:
+        raise HTTPException(400, f"Unknown action: {action}. Use: generate, edit_button, edit_upload, vision")
+
+
+@app.get("/v1/media/list")
+async def media_list():
+    """List all files in the media/ folder."""
+    files = []
+    for f in sorted(MEDIA_DIR.glob("*")):
+        if f.is_file():
+            files.append({
+                "name": f.name,
+                "size": f.stat().st_size,
+                "created": datetime.fromtimestamp(f.stat().st_ctime).isoformat(),
+            })
+    return {"media_dir": str(MEDIA_DIR), "count": len(files), "files": files}
+
+
+@app.delete("/v1/media/{filename}")
+async def media_delete(filename: str):
+    """Delete a file from media/ folder."""
+    target = MEDIA_DIR / filename
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404, f"File not found: {filename}")
+    # Prevent path traversal
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(400, "Invalid filename")
+    target.unlink()
+    return {"status": "deleted", "file": filename}
 
 
 @app.post("/cookies")
